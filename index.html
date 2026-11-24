@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>백팔배 카운터</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* 배치: 넓은 화면은 왼쪽 카메라 + 오른쪽 염주 패널, 좁은 화면은 위 카메라 + 아래 패널 */
+:root {
+  color-scheme: dark;
+  --ink: #171412;
+  --ink-2: #211c19;
+  --line: #3b332d;
+  --hanji: #efe6d6;
+  --muted: #a69a89;
+  --dancheong: #d4553a;
+  --bead: #c89f5e;
+  --jade: #74bba8;
+  --font-display: "Noto Serif KR", "Nanum Myeongjo", "Apple SD Gothic Neo", serif;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--ink);
+  color: var(--hanji);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.app {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+}
+.stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: #0d0b0a;
+  overflow: hidden;
+}
+.stage video, .stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.stage.mirror video, .stage.mirror canvas { transform: scaleX(-1); }
+.status {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(23, 20, 18, 0.82);
+  border: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 500;
+  max-width: calc(100% - 32px);
+}
+.status .dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.status[data-tone="ok"] .dot { background: var(--jade); }
+.status[data-tone="warn"] .dot { background: var(--dancheong); }
+.guide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+}
+.guide[hidden] { display: none; }
+.guide-card {
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.guide-card h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-wrap: balance;
+}
+.guide-card ol {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+}
+.guide-card ol strong { color: var(--hanji); font-weight: 500; }
+
+.panel {
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--ink-2);
+  border-left: 1px solid var(--line);
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.ring {
+  position: relative;
+  width: min(100%, 300px);
+  aspect-ratio: 1;
+  margin: 0 auto;
+  flex: none;
+}
+.ring svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ring circle { fill: var(--line); transition: fill 0.25s; }
+.ring circle.on { fill: var(--bead); }
+.ring circle.mark { fill: #5a4e44; }
+.ring circle.mark.on { fill: var(--dancheong); }
+.ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.count {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(64px, 22vw, 104px);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.count.bump { animation: bump 0.35s ease-out; }
+@keyframes bump { 0% { transform: scale(1.12); color: var(--bead); } 100% { transform: scale(1); } }
+.of { color: var(--muted); font-size: 15px; font-variant-numeric: tabular-nums; }
+.meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.meta b { color: var(--hanji); font-weight: 500; }
+.buttons { display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; gap: 10px; }
+button, select, input {
+  font: inherit;
+  color: inherit;
+}
+button {
+  flex: 1;
+  min-height: 46px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary {
+  min-height: 56px;
+  background: var(--dancheong);
+  border-color: var(--dancheong);
+  color: #fff8f0;
+  font-size: 18px;
+  font-weight: 600;
+}
+button.primary:hover { filter: brightness(1.08); }
+:focus-visible { outline: 2px solid var(--jade); outline-offset: 2px; }
+.settings {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 14px;
+  align-items: center;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+}
+.settings label { color: var(--muted); }
+select, input[type="number"] {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--ink);
+}
+.note { margin: 0; color: var(--muted); font-size: 13px; }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 42%) minmax(0, 1fr); }
+  .panel { border-left: 0; border-top: 1px solid var(--line); padding: 16px; gap: 14px; }
+  .ring { width: min(62%, 230px); }
+  .guide-card h1 { font-size: 22px; }
+  .guide-card { font-size: 14px; gap: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .count.bump { animation: none; }
+  .ring circle { transition: none; }
+}
+</style>
+</head>
+<body>
+<main class="app">
+  <section class="stage mirror" id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+    <div class="guide" id="guide">
+      <div class="guide-card">
+        <h1>절은 몸으로, 숫자는 카메라가</h1>
+        <ol>
+          <li><strong>전신</strong>이 보이게 기기를 세워 둡니다. 옆모습과 앞모습 모두 됩니다. 머리부터 발끝, 엎드릴 자리까지 화면에 들어와야 합니다.</li>
+          <li><strong>시작</strong>을 누르고 방석 앞에 똑바로 섭니다. 선 자세를 2초쯤 읽고 나면 "시작합니다" 하고 알려 줍니다.</li>
+          <li>엎드렸다가 <strong>다시 일어서면 1회</strong>로 셉니다. 숫자는 소리로 읽어 줍니다.</li>
+        </ol>
+        <p class="note">영상은 이 기기 안에서만 처리되고 어디로도 보내지 않습니다.</p>
+      </div>
+    </div>
+    <div class="status" id="status" data-tone="idle"><span class="dot"></span><span id="statusText">인식 모델을 불러오는 중</span></div>
+  </section>
+
+  <aside class="panel">
+    <div class="ring" aria-hidden="true">
+      <svg id="beads" viewBox="0 0 200 200"></svg>
+      <div class="ring-center">
+        <div class="count" id="count">0</div>
+        <div class="of">/ <span id="targetText">108</span></div>
+      </div>
+    </div>
+    <div class="meta" aria-live="polite">
+      <span>걸린 시간 <b id="elapsed">00:00</b></span>
+      <span>남은 횟수 <b id="remain">108</b></span>
+    </div>
+
+    <div class="buttons">
+      <button class="primary" id="mainBtn" type="button">시작</button>
+      <div class="row">
+        <button id="minusBtn" type="button" aria-label="1회 빼기">−1</button>
+        <button id="plusBtn" type="button" aria-label="1회 더하기">+1</button>
+        <button id="resetBtn" type="button">처음부터</button>
+      </div>
+    </div>
+
+    <div class="settings">
+      <label for="targetInput">목표 횟수</label>
+      <input id="targetInput" type="number" min="1" max="9999" step="1" value="108" inputmode="numeric">
+      <label for="soundSelect">소리</label>
+      <select id="soundSelect">
+        <option value="voice">매번 숫자 읽기</option>
+        <option value="voice10">목탁 소리, 10회마다 숫자</option>
+        <option value="tick">목탁 소리만</option>
+        <option value="off">끄기</option>
+      </select>
+      <label for="cameraSelect">카메라</label>
+      <select id="cameraSelect">
+        <option value="user">앞쪽 (화면 보는 쪽)</option>
+        <option value="environment">뒤쪽</option>
+      </select>
+    </div>
+    <p class="note">숫자가 틀리면 −1, +1로 바로잡을 수 있습니다. 처음 열 때는 인식 모델을 내려받느라 인터넷이 필요합니다.</p>
+  </aside>
+</main>
+
+<script type="module">
+const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+
+// 어깨 높이와 몸에서 가장 높은 점을 각각 선 자세 0, 바닥 1로 환산해 평균한 값(p)으로 판정한다.
+// 두 값을 같이 써서 옆모습과 앞모습 어느 쪽에서도 같은 기준이 통한다.
+const DOWN_AT = 0.55;      // 이보다 낮아지면 엎드린 것으로 본다
+const UP_AT = 0.25;        // 이보다 높아지면 일어선 것으로 본다
+const HOLD_DOWN_MS = 150;
+const HOLD_UP_MS = 250;
+const MIN_GAP_MS = 1500;   // 한 번의 절에 걸리는 최소 시간
+const LOST_LOW_AT = 0.4;   // 낮은 자세에서 인식이 끊기면 엎드린 것으로 본다
+const LOST_MS = 400;
+
+const $ = (id) => document.getElementById(id);
+const video = $("video"), canvas = $("overlay"), ctx = canvas.getContext("2d");
+const stage = $("stage"), guide = $("guide");
+const statusEl = $("status"), statusText = $("statusText");
+const countEl = $("count"), targetText = $("targetText"), elapsedEl = $("elapsed"), remainEl = $("remain");
+const mainBtn = $("mainBtn"), minusBtn = $("minusBtn"), plusBtn = $("plusBtn"), resetBtn = $("resetBtn");
+const targetInput = $("targetInput"), soundSelect = $("soundSelect"), cameraSelect = $("cameraSelect");
+const beads = $("beads");
+
+const S = {
+  phase: "idle",           // idle | calib | run | pause | done
+  count: 0,
+  target: 108,
+  standY: null, standTopY: null, floorY: null,
+  posture: "up", sm: null, lastSeen: 0, lastCountT: 0, downSince: 0, upSince: 0,
+  calib: [],
+  runMs: 0, runFrom: 0,
+};
+let landmarker = null, modelError = null, stream = null, lastVideoTime = -1, wakeLock = null;
+let audio = null;
+
+/* ---------- 설정 기억 ---------- */
+function loadPrefs() {
+  try {
+    const p = JSON.parse(localStorage.getItem("bae108") || "{}");
+    if (p.target) { S.target = p.target; targetInput.value = p.target; }
+    if (p.sound) soundSelect.value = p.sound;
+    if (p.camera) cameraSelect.value = p.camera;
+  } catch (e) {}
+}
+function savePrefs() {
+  try {
+    localStorage.setItem("bae108", JSON.stringify({ target: S.target, sound: soundSelect.value, camera: cameraSelect.value }));
+  } catch (e) {}
+}
+
+/* ---------- 화면 ---------- */
+function buildBeads() {
+  const NS = "http://www.w3.org/2000/svg";
+  beads.textContent = "";
+  for (let i = 0; i < 108; i++) {
+    const a = (i / 108) * Math.PI * 2 - Math.PI / 2;
+    const c = document.createElementNS(NS, "circle");
+    const mark = i % 27 === 26;      // 27알마다 굵은 알
+    c.setAttribute("cx", (100 + 93 * Math.cos(a)).toFixed(2));
+    c.setAttribute("cy", (100 + 93 * Math.sin(a)).toFixed(2));
+    c.setAttribute("r", mark ? 3.4 : 2.1);
+    if (mark) c.classList.add("mark");
+    beads.appendChild(c);
+  }
+}
+function fmt(ms) {
+  const s = Math.floor(ms / 1000);
+  return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+}
+function elapsedMs() { return S.runMs + (S.phase === "run" ? performance.now() - S.runFrom : 0); }
+function render() {
+  countEl.textContent = S.count;
+  targetText.textContent = S.target;
+  remainEl.textContent = Math.max(0, S.target - S.count);
+  const lit = Math.min(108, Math.floor((S.count / S.target) * 108 + 1e-9));
+  const cs = beads.children;
+  for (let i = 0; i < cs.length; i++) cs[i].classList.toggle("on", i < lit);
+  mainBtn.textContent = { idle: "시작", calib: "준비 중…", run: "잠시 멈춤", pause: "계속", done: "다시 하기" }[S.phase];
+  mainBtn.disabled = S.phase === "calib" && !stream;
+  guide.hidden = S.phase !== "idle";
+}
+function setStatus(text, tone = "idle") { statusText.textContent = text; statusEl.dataset.tone = tone; }
+
+/* ---------- 소리 ---------- */
+function koNum(n) {
+  const ones = ["", "하나", "둘", "셋", "넷", "다섯", "여섯", "일곱", "여덟", "아홉"];
+  const tens = ["", "열", "스물", "서른", "마흔", "쉰", "예순", "일흔", "여든", "아흔"];
+  if (n <= 0 || n >= 200) return String(n);
+  const h = n >= 100 ? "백" : "", r = n % 100;
+  return h + tens[Math.floor(r / 10)] + ones[r % 10] || String(n);
+}
+function say(text) {
+  if (!("speechSynthesis" in window)) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "ko-KR"; u.rate = 1.1;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+function tone(freq, dur, type = "sine", gain = 0.25, when = 0) {
+  if (!audio) return;
+  const t = audio.currentTime + when;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(audio.destination);
+  o.start(t); o.stop(t + dur + 0.05);
+}
+function moktak() { tone(820, 0.09, "triangle", 0.4); tone(410, 0.12, "sine", 0.25); }
+function bell(when = 0) { [220, 440, 663, 884].forEach((f, i) => tone(f, 3.2 - i * 0.5, "sine", 0.22 / (i + 1), when)); }
+function announce(n) {
+  const mode = soundSelect.value;
+  if (mode === "off") return;
+  if (n >= S.target) return;                      // 마지막은 종소리로 알린다
+  if (mode === "voice") say(koNum(n));
+  else { moktak(); if (mode === "voice10" && n % 10 === 0) say(koNum(n)); }
+}
+
+/* ---------- 횟수 ---------- */
+function setCount(n, fromCamera) {
+  n = Math.max(0, n);
+  if (n === S.count) return;
+  S.count = n;
+  countEl.classList.remove("bump"); void countEl.offsetWidth; countEl.classList.add("bump");
+  if (fromCamera) announce(n);
+  if (fromCamera && n >= S.target && S.phase === "run") finish();
+  render();
+}
+function finish() {
+  S.runMs = elapsedMs(); S.phase = "done";
+  if (soundSelect.value !== "off") {
+    bell(0); bell(1.4); bell(2.8);
+    setTimeout(() => say(koNum(S.target) + "배를 마쳤습니다"), 4200);
+  }
+  setStatus(S.target + "배를 마쳤습니다", "ok");
+  releaseWake();
+}
+
+/* ---------- 자세 판정 ---------- */
+const vis = (p) => (p && (p.visibility ?? 1)) || 0;
+function avgY(lm, a, b, min = 0.5) {
+  const va = vis(lm[a]), vb = vis(lm[b]);
+  if (va < min && vb < min) return null;
+  if (va >= min && vb >= min) return (lm[a].y + lm[b].y) / 2;
+  return va >= min ? lm[a].y : lm[b].y;
+}
+function topY(lm) {
+  let top = null;
+  for (const i of [0, 7, 8, 11, 12, 23, 24]) if (vis(lm[i]) >= 0.5 && (top == null || lm[i].y < top)) top = lm[i].y;
+  return top;
+}
+function calibrate(lm, t) {
+  const sh = avgY(lm, 11, 12), hip = avgY(lm, 23, 24), knee = avgY(lm, 25, 26), ank = avgY(lm, 27, 28);
+  if (sh == null || hip == null || knee == null || ank == null) {
+    S.calib = []; setStatus("머리부터 발끝까지 보이게 서 주세요", "warn"); return;
+  }
+  const body = ank - sh, torso = (hip - sh) / body;
+  const standing = body > 0.3 && torso > 0.28 && torso < 0.6 && knee > hip + body * 0.12 && ank > knee + body * 0.12;
+  if (!standing) {
+    S.calib = [];
+    setStatus(body <= 0.3 ? "조금 더 가까이 서 주세요" : "똑바로 서 주세요", "warn"); return;
+  }
+  const top = topY(lm);
+  S.calib.push({ t, sh, ank, top });
+  S.calib = S.calib.filter((c) => t - c.t <= 2000);
+  const ys = S.calib.map((c) => c.sh);
+  const steady = Math.max(...ys) - Math.min(...ys) < 0.03;
+  if (!steady) { S.calib = [{ t, sh, ank, top }]; }
+  setStatus("선 자세를 읽는 중, 잠시 그대로", "ok");
+  if (steady && t - S.calib[0].t >= 1500 && S.calib.length >= 8) {
+    S.standY = ys.reduce((a, b) => a + b, 0) / ys.length;
+    S.floorY = S.calib.reduce((a, c) => a + c.ank, 0) / S.calib.length;
+    S.standTopY = S.calib.reduce((a, c) => a + c.top, 0) / S.calib.length;
+    S.posture = "up"; S.sm = 0; S.lastSeen = t; S.downSince = 0; S.upSince = 0; S.lastCountT = t;
+    S.phase = "run"; S.runFrom = performance.now();
+    if (soundSelect.value !== "off") say("시작합니다");
+    setStatus("세는 중", "ok");
+    render();
+  }
+}
+function track(lm, t) {
+  const sh = lm ? avgY(lm, 11, 12) : null;
+  const top = lm ? topY(lm) : null;
+  if (sh == null && top == null) {
+    if (S.posture === "up" && S.sm != null && S.sm > LOST_LOW_AT && t - S.lastSeen > LOST_MS) {
+      S.posture = "down"; S.upSince = 0;
+    }
+    return;
+  }
+  const ps = sh == null ? null : (sh - S.standY) / (S.floorY - S.standY);
+  const pt = top == null ? null : (top - S.standTopY) / (S.floorY - S.standTopY);
+  const p = ps == null ? pt : pt == null ? ps : (ps + pt) / 2;
+  S.sm = (S.sm == null || t - S.lastSeen > 600) && S.posture === "up" ? p : (S.sm ?? p) + 0.5 * (p - (S.sm ?? p));
+  S.lastSeen = t;
+  if (S.posture === "up") {
+    if (S.sm > DOWN_AT) {
+      S.downSince = S.downSince || t;
+      if (t - S.downSince >= HOLD_DOWN_MS) { S.posture = "down"; S.upSince = 0; }
+    } else S.downSince = 0;
+  } else {
+    if (S.sm < UP_AT) {
+      S.upSince = S.upSince || t;
+      if (t - S.upSince >= HOLD_UP_MS && t - S.lastCountT >= MIN_GAP_MS) {
+        S.posture = "up"; S.downSince = 0; S.lastCountT = t;
+        setCount(S.count + 1, true);
+      }
+    } else S.upSince = 0;
+  }
+}
+
+/* ---------- 그리기 ---------- */
+const BONES = [[11, 12], [11, 23], [12, 24], [23, 24], [23, 25], [24, 26], [25, 27], [26, 28], [11, 13], [13, 15], [12, 14], [14, 16], [0, 11], [0, 12]];
+function draw(lm) {
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (S.standY != null && (S.phase === "run" || S.phase === "pause")) {
+    const line = (p, color) => {
+      const y = (S.standY + p * (S.floorY - S.standY)) * h;
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([10, 10]);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); ctx.setLineDash([]);
+    };
+    line(UP_AT, "rgba(239,230,214,0.45)");
+    line(DOWN_AT, "rgba(212,85,58,0.7)");
+  }
+  if (!lm) return;
+  ctx.lineWidth = Math.max(3, w / 220); ctx.lineCap = "round";
+  ctx.strokeStyle = S.posture === "down" && S.phase === "run" ? "#d4553a" : "#74bba8";
+  for (const [a, b] of BONES) {
+    if (vis(lm[a]) < 0.5 || vis(lm[b]) < 0.5) continue;
+    ctx.beginPath(); ctx.moveTo(lm[a].x * w, lm[a].y * h); ctx.lineTo(lm[b].x * w, lm[b].y * h); ctx.stroke();
+  }
+}
+
+/* ---------- 카메라와 모델 ---------- */
+async function loadModel() {
+  try {
+    const { PoseLandmarker, FilesetResolver } = await import(MP + "/vision_bundle.mjs");
+    const fileset = await FilesetResolver.forVisionTasks(MP + "/wasm");
+    const make = (delegate) => PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL, delegate },
+      runningMode: "VIDEO", numPoses: 1,
+    });
+    try { landmarker = await make("GPU"); } catch (e) { landmarker = await make("CPU"); }
+    if (S.phase === "idle") setStatus("준비됐습니다. 시작을 눌러 주세요", "ok");
+  } catch (e) {
+    modelError = e;
+    setStatus("인식 모델을 불러오지 못했습니다. 인터넷 연결을 확인하고 새로 고쳐 주세요", "warn");
+  }
+}
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error("이 주소에서는 카메라를 쓸 수 없습니다. https 주소로 열어 주세요");
+  }
+  stopCamera();
+  const facing = cameraSelect.value;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: facing, width: { ideal: 960 }, height: { ideal: 720 } },
+    });
+  } catch (e) {
+    if (e.name === "NotAllowedError") throw new Error("카메라 권한이 꺼져 있습니다. 주소창의 카메라 아이콘에서 허용해 주세요");
+    if (e.name === "NotFoundError" || e.name === "OverconstrainedError") throw new Error("쓸 수 있는 카메라를 찾지 못했습니다");
+    throw new Error("카메라를 켜지 못했습니다. 다른 프로그램이 쓰고 있는지 확인해 주세요");
+  }
+  video.srcObject = stream;
+  await video.play();
+  const actual = stream.getVideoTracks()[0].getSettings().facingMode;
+  stage.classList.toggle("mirror", (actual || facing) !== "environment");
+  lastVideoTime = -1;
+}
+function stopCamera() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+}
+async function requestWake() {
+  try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+}
+function releaseWake() { try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && (S.phase === "run" || S.phase === "calib")) requestWake();
+});
+
+function loop() {
+  requestAnimationFrame(loop);
+  if (S.phase === "run") elapsedEl.textContent = fmt(elapsedMs());
+  if (!landmarker || !stream || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  if (canvas.width !== video.videoWidth) { canvas.width = video.videoWidth; canvas.height = video.videoHeight; }
+  const t = performance.now();
+  let lm = null;
+  try { lm = landmarker.detectForVideo(video, t).landmarks[0] || null; } catch (e) { return; }
+  if (S.phase === "calib") {
+    if (lm) calibrate(lm, t); else { S.calib = []; setStatus("사람이 보이지 않습니다. 전신이 보이게 서 주세요", "warn"); }
+  } else if (S.phase === "run") {
+    track(lm, t);
+  }
+  draw(lm);
+}
+
+/* ---------- 조작 ---------- */
+async function begin() {
+  if (modelError) { setStatus("인식 모델을 불러오지 못했습니다. 새로 고쳐 주세요", "warn"); return; }
+  S.phase = "calib"; S.calib = []; S.standY = S.floorY = null;
+  render();
+  setStatus("카메라를 켜는 중");
+  try {
+    if (!stream) await startCamera();
+  } catch (e) {
+    S.phase = "idle"; render(); setStatus(e.message, "warn"); return;
+  }
+  render();
+  requestWake();
+  setStatus(landmarker ? "방석 앞에 똑바로 서 주세요" : "인식 모델을 불러오는 중", landmarker ? "ok" : "idle");
+  if (soundSelect.value !== "off") say("똑바로 서 주세요");
+}
+mainBtn.addEventListener("click", () => {
+  if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  if (audio && audio.state === "suspended") audio.resume();
+  if (S.phase === "idle") begin();
+  else if (S.phase === "run") {
+    S.runMs = elapsedMs(); S.phase = "pause"; setStatus("잠시 멈춤"); releaseWake(); render();
+  } else if (S.phase === "pause") {
+    S.phase = "calib"; S.calib = []; requestWake();          // 자리가 바뀌었을 수 있어 선 자세를 다시 읽는다
+    setStatus("방석 앞에 똑바로 서 주세요", "ok"); render();
+  } else if (S.phase === "done") {
+    resetAll(); begin();
+  }
+});
+function resetAll() {
+  S.count = 0; S.runMs = 0; S.phase = "idle"; S.standY = S.standTopY = S.floorY = null; S.calib = [];
+  elapsedEl.textContent = "00:00";
+  try { speechSynthesis.cancel(); } catch (e) {}
+  releaseWake();
+  setStatus(landmarker ? "준비됐습니다. 시작을 눌러 주세요" : "인식 모델을 불러오는 중", landmarker ? "ok" : "idle");
+  render();
+}
+resetBtn.addEventListener("click", resetAll);
+plusBtn.addEventListener("click", () => setCount(S.count + 1, false));
+minusBtn.addEventListener("click", () => setCount(S.count - 1, false));
+targetInput.addEventListener("change", () => {
+  const v = Math.round(Number(targetInput.value));
+  S.target = v >= 1 && v <= 9999 ? v : 108;
+  targetInput.value = S.target;
+  savePrefs(); render();
+});
+soundSelect.addEventListener("change", savePrefs);
+cameraSelect.addEventListener("change", async () => {
+  savePrefs();
+  if (!stream) return;
+  try { await startCamera(); } catch (e) { setStatus(e.message, "warn"); }
+});
+
+loadPrefs();
+buildBeads();
+render();
+loadModel();
+loop();
+</script>
+</body>
+</html>
