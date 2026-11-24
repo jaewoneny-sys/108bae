@@ -229,7 +229,7 @@ select, input[type="number"] {
       <div class="guide-card">
         <h1>절은 몸으로, 숫자는 카메라가</h1>
         <ol>
-          <li><strong>전신</strong>이 보이게 기기를 세워 둡니다. 옆모습과 앞모습 모두 됩니다. 머리부터 발끝, 엎드릴 자리까지 화면에 들어와야 합니다.</li>
+          <li>기기를 세워 둡니다. 옆모습과 앞모습 모두 되고, <strong>상체만 보여도</strong> 셉니다. 전신이 다 보이면 가장 정확합니다.</li>
           <li><strong>시작</strong>을 누르고 방석 앞에 똑바로 섭니다. 선 자세를 2초쯤 읽고 나면 "시작합니다" 하고 알려 줍니다.</li>
           <li>엎드렸다가 <strong>다시 일어서면 1회</strong>로 셉니다. 숫자는 소리로 읽어 줍니다.</li>
         </ol>
@@ -292,7 +292,7 @@ const UP_AT = 0.25;        // 이보다 높아지면 일어선 것으로 본다
 const HOLD_DOWN_MS = 150;
 const HOLD_UP_MS = 250;
 const MIN_GAP_MS = 1500;   // 한 번의 절에 걸리는 최소 시간
-const LOST_LOW_AT = 0.4;   // 낮은 자세에서 인식이 끊기면 엎드린 것으로 본다
+const LOST_LOW_AT = 0.15;  // 내려가던 중에 인식이 끊기면 엎드린 것으로 본다
 const LOST_MS = 400;
 
 const $ = (id) => document.getElementById(id);
@@ -309,7 +309,7 @@ const S = {
   count: 0,
   target: 108,
   standY: null, standTopY: null, floorY: null,
-  posture: "up", sm: null, lastSeen: 0, lastCountT: 0, downSince: 0, upSince: 0,
+  posture: "up", sm: 0, lastSeen: 0, lastTop: 0, lastCountT: 0, downSince: 0, upSince: 0,
   calib: [],
   runMs: 0, runFrom: 0,
 };
@@ -434,29 +434,42 @@ function topY(lm) {
   for (const i of [0, 7, 8, 11, 12, 23, 24]) if (vis(lm[i]) >= 0.5 && (top == null || lm[i].y < top)) top = lm[i].y;
   return top;
 }
+// 보이는 부위만으로 바닥 높이를 어림한다. 발목이 보이면 그대로 쓰고, 아니면 몸 비율로 추정한다.
+function estimateFloor(sh, hip, knee, ank, head, top) {
+  let f = null;
+  if (ank != null) f = ank;
+  else if (sh != null && knee != null) f = sh + (knee - sh) / 0.70;
+  else if (sh != null && hip != null) f = sh + (hip - sh) / 0.37;
+  else if (hip != null && knee != null) f = hip + (knee - hip) / 0.46;
+  else if (sh != null && head != null && sh - head > 0.02) f = sh + (sh - head) / 0.14;
+  if (f == null || f - top < 0.2) f = top + 0.5;
+  return f;
+}
 function calibrate(lm, t) {
   const sh = avgY(lm, 11, 12), hip = avgY(lm, 23, 24), knee = avgY(lm, 25, 26), ank = avgY(lm, 27, 28);
-  if (sh == null || hip == null || knee == null || ank == null) {
-    S.calib = []; setStatus("머리부터 발끝까지 보이게 서 주세요", "warn"); return;
-  }
-  const body = ank - sh, torso = (hip - sh) / body;
-  const standing = body > 0.3 && torso > 0.28 && torso < 0.6 && knee > hip + body * 0.12 && ank > knee + body * 0.12;
-  if (!standing) {
-    S.calib = [];
-    setStatus(body <= 0.3 ? "조금 더 가까이 서 주세요" : "똑바로 서 주세요", "warn"); return;
-  }
+  const head = avgY(lm, 0, 0) ?? avgY(lm, 7, 8);
   const top = topY(lm);
-  S.calib.push({ t, sh, ank, top });
+  if (top == null) {
+    S.calib = []; setStatus("몸이 잘 보이지 않습니다. 상체라도 보이게 서 주세요", "warn"); return;
+  }
+  if (sh != null && hip != null && knee != null && ank != null) {      // 전신이 보이면 선 자세인지도 확인한다
+    const body = ank - sh, torso = (hip - sh) / body;
+    const standing = body > 0.2 && torso > 0.28 && torso < 0.6 && knee > hip + body * 0.12 && ank > knee + body * 0.12;
+    if (!standing) { S.calib = []; setStatus("똑바로 서 주세요", "warn"); return; }
+  }
+  const sample = { t, top, sh, floor: estimateFloor(sh, hip, knee, ank, head, top) };
+  S.calib.push(sample);
   S.calib = S.calib.filter((c) => t - c.t <= 2000);
-  const ys = S.calib.map((c) => c.sh);
+  const ys = S.calib.map((c) => c.top);
   const steady = Math.max(...ys) - Math.min(...ys) < 0.03;
-  if (!steady) { S.calib = [{ t, sh, ank, top }]; }
+  if (!steady) S.calib = [sample];
   setStatus("선 자세를 읽는 중, 잠시 그대로", "ok");
   if (steady && t - S.calib[0].t >= 1500 && S.calib.length >= 8) {
-    S.standY = ys.reduce((a, b) => a + b, 0) / ys.length;
-    S.floorY = S.calib.reduce((a, c) => a + c.ank, 0) / S.calib.length;
-    S.standTopY = S.calib.reduce((a, c) => a + c.top, 0) / S.calib.length;
-    S.posture = "up"; S.sm = 0; S.lastSeen = t; S.downSince = 0; S.upSince = 0; S.lastCountT = t;
+    const mean = (k) => S.calib.reduce((a, c) => a + c[k], 0) / S.calib.length;
+    S.standTopY = mean("top");
+    S.standY = S.calib.every((c) => c.sh != null) ? mean("sh") : null;
+    S.floorY = mean("floor");
+    S.posture = "up"; S.sm = 0; S.lastSeen = t; S.lastTop = S.standTopY; S.downSince = 0; S.upSince = 0; S.lastCountT = t;
     S.phase = "run"; S.runFrom = performance.now();
     if (soundSelect.value !== "off") say("시작합니다");
     setStatus("세는 중", "ok");
@@ -466,17 +479,19 @@ function calibrate(lm, t) {
 function track(lm, t) {
   const sh = lm ? avgY(lm, 11, 12) : null;
   const top = lm ? topY(lm) : null;
-  if (sh == null && top == null) {
-    if (S.posture === "up" && S.sm != null && S.sm > LOST_LOW_AT && t - S.lastSeen > LOST_MS) {
-      S.posture = "down"; S.upSince = 0;
+  const ps = sh == null || S.standY == null ? null : (sh - S.standY) / (S.floorY - S.standY);
+  const pt = top == null ? null : (top - S.standTopY) / (S.floorY - S.standTopY);
+  if (ps == null && pt == null) {
+    // 몸이 화면 아래로 내려가 사라진 경우: 내려가던 중이었거나 화면 아래쪽에서 끊겼으면 엎드린 것으로 본다
+    if (S.posture === "up" && t - S.lastSeen > LOST_MS && (S.sm > LOST_LOW_AT || S.lastTop > 0.8)) {
+      S.posture = "down"; S.upSince = 0; S.sm = Math.max(S.sm, DOWN_AT);
     }
     return;
   }
-  const ps = sh == null ? null : (sh - S.standY) / (S.floorY - S.standY);
-  const pt = top == null ? null : (top - S.standTopY) / (S.floorY - S.standTopY);
   const p = ps == null ? pt : pt == null ? ps : (ps + pt) / 2;
-  S.sm = (S.sm == null || t - S.lastSeen > 600) && S.posture === "up" ? p : (S.sm ?? p) + 0.5 * (p - (S.sm ?? p));
+  S.sm = S.sm + 0.5 * (p - S.sm);
   S.lastSeen = t;
+  if (top != null) S.lastTop = top;
   if (S.posture === "up") {
     if (S.sm > DOWN_AT) {
       S.downSince = S.downSince || t;
@@ -498,9 +513,10 @@ const BONES = [[11, 12], [11, 23], [12, 24], [23, 24], [23, 25], [24, 26], [25, 
 function draw(lm) {
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
-  if (S.standY != null && (S.phase === "run" || S.phase === "pause")) {
+  if (S.standTopY != null && (S.phase === "run" || S.phase === "pause")) {
     const line = (p, color) => {
-      const y = (S.standY + p * (S.floorY - S.standY)) * h;
+      const ref = S.standY ?? S.standTopY;
+      const y = (ref + p * (S.floorY - ref)) * h;
       ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([10, 10]);
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); ctx.setLineDash([]);
     };
@@ -576,7 +592,7 @@ function loop() {
   let lm = null;
   try { lm = landmarker.detectForVideo(video, t).landmarks[0] || null; } catch (e) { return; }
   if (S.phase === "calib") {
-    if (lm) calibrate(lm, t); else { S.calib = []; setStatus("사람이 보이지 않습니다. 전신이 보이게 서 주세요", "warn"); }
+    if (lm) calibrate(lm, t); else { S.calib = []; setStatus("사람이 보이지 않습니다. 화면 안에 서 주세요", "warn"); }
   } else if (S.phase === "run") {
     track(lm, t);
   }
@@ -586,7 +602,7 @@ function loop() {
 /* ---------- 조작 ---------- */
 async function begin() {
   if (modelError) { setStatus("인식 모델을 불러오지 못했습니다. 새로 고쳐 주세요", "warn"); return; }
-  S.phase = "calib"; S.calib = []; S.standY = S.floorY = null;
+  S.phase = "calib"; S.calib = []; S.standY = S.standTopY = S.floorY = null;
   render();
   setStatus("카메라를 켜는 중");
   try {
