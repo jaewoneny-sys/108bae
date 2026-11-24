@@ -205,6 +205,10 @@ select, input[type="number"] {
   border: 1px solid var(--line);
   background: var(--ink);
 }
+.bgm { display: flex; gap: 8px; min-width: 0; }
+.bgm select { min-width: 0; flex: 1; }
+.bgm button { flex: none; min-height: 42px; border-radius: 8px; }
+input[type="range"] { width: 100%; accent-color: var(--bead); }
 .note { margin: 0; color: var(--muted); font-size: 13px; }
 
 @media (max-width: 760px) {
@@ -271,13 +275,21 @@ select, input[type="number"] {
         <option value="tick">목탁 소리만</option>
         <option value="off">끄기</option>
       </select>
+      <label for="bgmSelect">배경음악</label>
+      <div class="bgm">
+        <select id="bgmSelect"><option value="off">없음</option></select>
+        <button id="bgmBtn" type="button">파일 고르기</button>
+        <input id="bgmFile" type="file" accept="audio/*" hidden>
+      </div>
+      <label for="bgmVol">음악 크기</label>
+      <input id="bgmVol" type="range" min="0" max="100" step="5" value="60">
       <label for="cameraSelect">카메라</label>
       <select id="cameraSelect">
         <option value="user">앞쪽 (화면 보는 쪽)</option>
         <option value="environment">뒤쪽</option>
       </select>
     </div>
-    <p class="note">숫자가 틀리면 −1, +1로 바로잡을 수 있습니다. 처음 열 때는 인식 모델을 내려받느라 인터넷이 필요합니다.</p>
+    <p class="note">숫자가 틀리면 −1, +1로 바로잡을 수 있습니다. 배경음악은 이 기기에 있는 파일을 골라 쓰고, 한 번 고르면 기억합니다. 처음 열 때는 인식 모델을 내려받느라 인터넷이 필요합니다.</p>
   </aside>
 </main>
 
@@ -305,6 +317,7 @@ const countEl = $("count"), targetText = $("targetText"), elapsedEl = $("elapsed
 const mainBtn = $("mainBtn"), minusBtn = $("minusBtn"), plusBtn = $("plusBtn"), resetBtn = $("resetBtn");
 const targetInput = $("targetInput"), soundSelect = $("soundSelect"), cameraSelect = $("cameraSelect");
 const beads = $("beads");
+const bgmSelect = $("bgmSelect"), bgmBtn = $("bgmBtn"), bgmFile = $("bgmFile"), bgmVol = $("bgmVol");
 
 const S = {
   phase: "idle",           // idle | calib | run | pause | done
@@ -319,17 +332,20 @@ let landmarker = null, modelError = null, stream = null, lastVideoTime = -1, wak
 let audio = null;
 
 /* ---------- 설정 기억 ---------- */
+let wantBgm = false;
 function loadPrefs() {
   try {
     const p = JSON.parse(localStorage.getItem("bae108") || "{}");
     if (p.target) { S.target = p.target; targetInput.value = p.target; }
     if (p.sound) soundSelect.value = p.sound;
     if (p.camera) cameraSelect.value = p.camera;
+    if (p.vol != null) bgmVol.value = p.vol;
+    wantBgm = p.bgm === "file";
   } catch (e) {}
 }
 function savePrefs() {
   try {
-    localStorage.setItem("bae108", JSON.stringify({ target: S.target, sound: soundSelect.value, camera: cameraSelect.value }));
+    localStorage.setItem("bae108", JSON.stringify({ target: S.target, sound: soundSelect.value, camera: cameraSelect.value, bgm: bgmSelect.value, vol: bgmVol.value }));
   } catch (e) {}
 }
 
@@ -393,7 +409,57 @@ function tone(freq, dur, type = "sine", gain = 0.25, when = 0) {
   o.connect(g).connect(audio.destination);
   o.start(t); o.stop(t + dur + 0.05);
 }
-function moktak() { tone(820, 0.09, "triangle", 0.4); tone(410, 0.12, "sine", 0.25); }
+function moktak() {
+  if (!audio) return;
+  const t = audio.currentTime, out = audio.createGain();
+  out.gain.value = 0.9; out.connect(audio.destination);
+  // 채가 닿는 '딱' 소리: 아주 짧은 잡음
+  const len = Math.floor(audio.sampleRate * 0.03), buf = audio.createBuffer(1, len, audio.sampleRate), ch = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 2;
+  const n = audio.createBufferSource(), bp = audio.createBiquadFilter(), ng = audio.createGain();
+  bp.type = "bandpass"; bp.frequency.value = 2200; bp.Q.value = 0.8; ng.gain.value = 0.5;
+  n.buffer = buf; n.connect(bp).connect(ng).connect(out); n.start(t);
+  // 속이 빈 나무통의 울림: 낮은 음은 길게, 높은 음은 짧게 사라진다
+  for (const [f, g, d] of [[540, 0.7, 0.22], [815, 0.35, 0.12], [1490, 0.18, 0.06], [2350, 0.08, 0.035]]) {
+    const o = audio.createOscillator(), e = audio.createGain();
+    o.frequency.setValueAtTime(f * 1.08, t); o.frequency.exponentialRampToValueAtTime(f, t + 0.025);
+    e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(g, t + 0.003); e.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(e).connect(out); o.start(t); o.stop(t + d + 0.05);
+  }
+}
+function ensureAudio() {
+  if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  if (audio && audio.state === "suspended") audio.resume();
+}
+
+/* ---------- 배경음악: 이 기기에 있는 파일을 골라 이 기기에서만 재생한다 ---------- */
+const bgm = new Audio(); bgm.loop = true;
+let bgmUrl = null;
+function idb(mode, fn) {
+  return new Promise((res) => {
+    try {
+      const rq = indexedDB.open("bae108", 1);
+      rq.onupgradeneeded = () => rq.result.createObjectStore("kv");
+      rq.onerror = () => res(null);
+      rq.onsuccess = () => {
+        try {
+          const tx = rq.result.transaction("kv", mode), r = fn(tx.objectStore("kv"));
+          tx.oncomplete = () => res(r ? r.result : null); tx.onerror = () => res(null);
+        } catch (e) { res(null); }
+      };
+    } catch (e) { res(null); }
+  });
+}
+function setBgmFile(file) {
+  if (bgmUrl) URL.revokeObjectURL(bgmUrl);
+  bgmUrl = URL.createObjectURL(file);
+  bgm.src = bgmUrl;
+  let opt = bgmSelect.querySelector('option[value="file"]');
+  if (!opt) { opt = document.createElement("option"); opt.value = "file"; bgmSelect.appendChild(opt); }
+  opt.textContent = file.name || "내 음악 파일";
+}
+function bgmPlay() { if (bgmSelect.value === "file" && bgm.src) { bgm.volume = bgmVol.value / 100; bgm.play().catch(() => {}); } }
+function bgmStop(rewind) { bgm.pause(); if (rewind) { try { bgm.currentTime = 0; } catch (e) {} } }
 function bell(when = 0) { [220, 440, 663, 884].forEach((f, i) => tone(f, 3.2 - i * 0.5, "sine", 0.22 / (i + 1), when)); }
 function announce(n) {
   const mode = soundSelect.value;
@@ -414,7 +480,7 @@ function setCount(n, fromCamera) {
   render();
 }
 function finish() {
-  S.runMs = elapsedMs(); S.phase = "done";
+  S.runMs = elapsedMs(); S.phase = "done"; bgmStop(true);
   if (soundSelect.value !== "off") {
     bell(0); bell(1.4); bell(2.8);
     setTimeout(() => say(koNum(S.target) + "배를 마쳤습니다"), 4200);
@@ -590,17 +656,17 @@ async function begin() {
   try {
     if (!stream) await startCamera();
   } catch (e) {
-    S.phase = "idle"; render(); setStatus(e.message, "warn"); return;
+    S.phase = "idle"; bgmStop(true); render(); setStatus(e.message, "warn"); return;
   }
   requestWake();
   startRun();
 }
 mainBtn.addEventListener("click", () => {
-  if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
-  if (audio && audio.state === "suspended") audio.resume();
+  ensureAudio();
+  if (S.phase !== "run") bgmPlay();
   if (S.phase === "idle") begin();
   else if (S.phase === "run") {
-    S.runMs = elapsedMs(); S.phase = "pause"; setStatus("잠시 멈춤"); releaseWake(); render();
+    S.runMs = elapsedMs(); S.phase = "pause"; setStatus("잠시 멈춤"); releaseWake(); bgmStop(false); render();
   } else if (S.phase === "pause") {
     requestWake(); startRun();
   } else if (S.phase === "done") {
@@ -608,7 +674,7 @@ mainBtn.addEventListener("click", () => {
   }
 });
 function resetAll() {
-  S.count = 0; S.runMs = 0; S.phase = "idle"; S.standTop = null;
+  S.count = 0; S.runMs = 0; S.phase = "idle"; S.standTop = null; bgmStop(true);
   elapsedEl.textContent = "00:00";
   try { speechSynthesis.cancel(); } catch (e) {}
   releaseWake();
@@ -624,7 +690,20 @@ targetInput.addEventListener("change", () => {
   targetInput.value = S.target;
   savePrefs(); render();
 });
-soundSelect.addEventListener("change", savePrefs);
+soundSelect.addEventListener("change", () => {
+  savePrefs(); ensureAudio();
+  if (soundSelect.value === "tick" || soundSelect.value === "voice10") moktak();   // 고르면 한 번 들려준다
+});
+bgmBtn.addEventListener("click", () => bgmFile.click());
+bgmFile.addEventListener("change", () => {
+  const f = bgmFile.files && bgmFile.files[0];
+  if (!f) return;
+  setBgmFile(f); bgmSelect.value = "file"; savePrefs();
+  idb("readwrite", (st) => { st.put(f, "bgm"); });
+  if (S.phase === "run") bgmPlay();
+});
+bgmSelect.addEventListener("change", () => { savePrefs(); if (bgmSelect.value === "off") bgmStop(false); else if (S.phase === "run") bgmPlay(); });
+bgmVol.addEventListener("input", () => { bgm.volume = bgmVol.value / 100; savePrefs(); });
 cameraSelect.addEventListener("change", async () => {
   savePrefs();
   if (!stream) return;
@@ -632,6 +711,7 @@ cameraSelect.addEventListener("change", async () => {
 });
 
 loadPrefs();
+idb("readonly", (st) => st.get("bgm")).then((f) => { if (f) { setBgmFile(f); if (wantBgm) bgmSelect.value = "file"; } });
 buildBeads();
 render();
 loadModel();
