@@ -283,11 +283,11 @@ select, input[type="number"] {
 
 <script type="module">
 const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task";
 
 // 어깨 높이와 몸에서 가장 높은 점을 각각 선 자세 0, 바닥 1로 환산해 평균한 값(p)으로 판정한다.
 // 두 값을 같이 써서 옆모습과 앞모습 어느 쪽에서도 같은 기준이 통한다.
-const DOWN_AT = 0.55;      // 이보다 낮아지면 엎드린 것으로 본다
+const DOWN_AT = 0.45;      // 이보다 낮아지면 엎드린 것으로 본다
 const UP_AT = 0.25;        // 이보다 높아지면 일어선 것으로 본다
 const HOLD_DOWN_MS = 150;
 const HOLD_UP_MS = 250;
@@ -457,7 +457,8 @@ function calibrate(lm, t) {
     const standing = body > 0.2 && torso > 0.28 && torso < 0.6 && knee > hip + body * 0.12 && ank > knee + body * 0.12;
     if (!standing) { S.calib = []; setStatus("똑바로 서 주세요", "warn"); return; }
   }
-  const sample = { t, top, sh, floor: estimateFloor(sh, hip, knee, ank, head, top) };
+  const sample = { t, top, sh, floor: estimateFloor(sh, hip, knee, ank, head, top),
+    torso: sh != null && hip != null ? hip - sh : null, upper: sh != null || head != null };
   S.calib.push(sample);
   S.calib = S.calib.filter((c) => t - c.t <= 2000);
   const ys = S.calib.map((c) => c.top);
@@ -469,6 +470,8 @@ function calibrate(lm, t) {
     S.standTopY = mean("top");
     S.standY = S.calib.every((c) => c.sh != null) ? mean("sh") : null;
     S.floorY = mean("floor");
+    S.torso = S.calib.every((c) => c.torso != null) ? mean("torso") : null;
+    S.needUpper = S.calib.every((c) => c.upper);
     S.posture = "up"; S.sm = 0; S.lastSeen = t; S.lastTop = S.standTopY; S.downSince = 0; S.upSince = 0; S.lastCountT = t;
     S.phase = "run"; S.runFrom = performance.now();
     if (soundSelect.value !== "off") say("시작합니다");
@@ -479,6 +482,11 @@ function calibrate(lm, t) {
 function track(lm, t) {
   const sh = lm ? avgY(lm, 11, 12) : null;
   const top = lm ? topY(lm) : null;
+  const hip = lm ? avgY(lm, 23, 24) : null;
+  const head = lm ? (avgY(lm, 0, 0) ?? avgY(lm, 7, 8)) : null;
+  // 일어선 것으로 인정하려면 얼굴이나 어깨가 보이고 상체 길이가 선 자세와 비슷해야 한다(엎드린 몸을 잘못 읽은 뼈대 걸러내기)
+  const upright = (!S.needUpper || sh != null || head != null) &&
+    (S.torso == null || sh == null || hip == null || hip - sh > 0.5 * S.torso);
   const ps = sh == null || S.standY == null ? null : (sh - S.standY) / (S.floorY - S.standY);
   const pt = top == null ? null : (top - S.standTopY) / (S.floorY - S.standTopY);
   if (ps == null && pt == null) {
@@ -498,7 +506,7 @@ function track(lm, t) {
       if (t - S.downSince >= HOLD_DOWN_MS) { S.posture = "down"; S.upSince = 0; }
     } else S.downSince = 0;
   } else {
-    if (S.sm < UP_AT) {
+    if (S.sm < UP_AT && upright) {
       S.upSince = S.upSince || t;
       if (t - S.upSince >= HOLD_UP_MS && t - S.lastCountT >= MIN_GAP_MS) {
         S.posture = "up"; S.downSince = 0; S.lastCountT = t;
@@ -540,6 +548,7 @@ async function loadModel() {
     const make = (delegate) => PoseLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: MODEL, delegate },
       runningMode: "VIDEO", numPoses: 1,
+      minPosePresenceConfidence: 0.6, minTrackingConfidence: 0.6,   // 확신이 없는 자세는 버린다(엎드려 얼굴이 가려진 경우)
     });
     try { landmarker = await make("GPU"); } catch (e) { landmarker = await make("CPU"); }
     if (S.phase === "idle") setStatus("준비됐습니다. 시작을 눌러 주세요", "ok");
@@ -595,6 +604,8 @@ function loop() {
     if (lm) calibrate(lm, t); else { S.calib = []; setStatus("사람이 보이지 않습니다. 화면 안에 서 주세요", "warn"); }
   } else if (S.phase === "run") {
     track(lm, t);
+    if (S.phase === "run") setStatus("세는 중 · " + (S.posture === "down" ? "엎드림" : "섬") + " · 높이 " +
+      Math.round((1 - Math.min(1, Math.max(0, S.sm))) * 100) + "%", "ok");
   }
   draw(lm);
 }
