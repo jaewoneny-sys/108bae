@@ -230,7 +230,7 @@ select, input[type="number"] {
         <h1>절은 몸으로, 숫자는 카메라가</h1>
         <ol>
           <li>기기를 세워 둡니다. 옆모습과 앞모습 모두 되고, <strong>상체만 보여도</strong> 셉니다. 전신이 다 보이면 가장 정확합니다.</li>
-          <li><strong>시작</strong>을 누르고 방석 앞에 똑바로 섭니다. 선 자세를 2초쯤 읽고 나면 "시작합니다" 하고 알려 줍니다.</li>
+          <li><strong>시작</strong>을 누르고 방석 앞에 똑바로 섭니다. 선 자세를 1초쯤 읽고 나면 "시작합니다" 하고 알려 줍니다.</li>
           <li>엎드렸다가 <strong>다시 일어서면 1회</strong>로 셉니다. 숫자는 소리로 읽어 줍니다.</li>
         </ol>
         <p class="note">영상은 이 기기 안에서만 처리되고 어디로도 보내지 않습니다.</p>
@@ -465,7 +465,7 @@ function calibrate(lm, t) {
   const steady = Math.max(...ys) - Math.min(...ys) < 0.03;
   if (!steady) S.calib = [sample];
   setStatus("선 자세를 읽는 중, 잠시 그대로", "ok");
-  if (steady && t - S.calib[0].t >= 1500 && S.calib.length >= 8) {
+  if (steady && t - S.calib[0].t >= 1000 && S.calib.length >= 5) {
     const mean = (k) => S.calib.reduce((a, c) => a + c[k], 0) / S.calib.length;
     S.standTopY = mean("top");
     S.standY = S.calib.every((c) => c.sh != null) ? mean("sh") : null;
